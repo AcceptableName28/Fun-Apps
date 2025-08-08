@@ -55,29 +55,31 @@
 
     // ===== Sprite (your PNG) =====
     const vespaImg = new Image();
-    vespaImg.src = 'Blue Vespa Right.png'; // <-- keep this file next to this HTML
+    vespaImg.src = 'Blue Vespa Right.png'; // keep next to this HTML
     let vespaReady = false;
     vespaImg.onload = () => vespaReady = true;
 
     // ===== Physics / Tuning =====
     const floorY = H * 0.78;
-    const gravity       = 0.9;    // faster fall for snappier feel
-    const JUMP_VEL_1    = -14.5;  // tap jump
-    const JUMP_VEL_2    = -12.2;  // second jump
-    const COYOTE_FRAMES = 8;      // jump a few frames after leaving ground
-    const BUFFER_FRAMES = 10;     // queue jump a few frames before landing
+    const gravity       = 0.9;     // snappy fall
+    const JUMP_VEL_1    = -14.5;   // first jump
+    const JUMP_VEL_2    = -12.2;   // double jump
+    const COYOTE_FRAMES = 8;       // grace frames after leaving ground
+    const BUFFER_FRAMES = 10;      // queue jump presses
 
     // ===== World =====
     const world = {
       t: 0,
-      speed: 8,
+      speed: 8,            // base road & obstacle scroll speed
       baseSpeed: 8,
-      maxSpeed: 18,
+      maxSpeed: 17,        // slightly lowered top speed for usability
       score: 0,
       best: Number(localStorage.getItem('vespa_best') || 0),
       alive: false,
-      spawnTimer: 0,
-      spawnInterval: 80,
+      // spawn control using cooldown frames (wider gaps to start)
+      spawnCooldown: 0,
+      nextSpawnMin: 110,   // min frames between spawns (user friendly)
+      nextSpawnMax: 170,   // max frames between spawns
       difficultyTimer: 0
     };
 
@@ -86,7 +88,7 @@
     const KEY  = { UP:38, SPACE:32, R:82 };
 
     // ===== Player =====
-    const PLAYER_W = 120;  // scale matched to the earlier vector scooter
+    const PLAYER_W = 120;  // sized like your previous scooter
     const PLAYER_H = 80;
     const player = {
       x: W*0.18, y: floorY, vy: 0,
@@ -95,23 +97,36 @@
       coyote: 0, jumpBuffer: 0, usedDouble: false
     };
 
-    // ===== Obstacles =====
+    // ===== Obstacles (triangles) =====
+    const TRI_COLORS = ['#ff6b6b','#ffd166','#06d6a0','#118ab2','#8338ec','#ef476f','#f9c74f','#90be6d'];
     const obstacles = [];
-    function spawnObstacle(){
-      const type   = Math.random() < 0.5 ? 'cone' : 'crate';
-      const stacks = 1 + Math.floor(Math.random()*3);    // 1–3 high
-      const w = type==='cone' ? 32 : 42;
-      const h = type==='cone' ? 46 : 42;
-      obstacles.push({ x: W+40, y: floorY - h, w, h, type, stacks });
+    function spawnTriangle(){
+      // random triangle sizes, but reasonable for jumping
+      const base  = 36 + Math.random()*42;   // width at base
+      const high  = 40 + Math.random()*80;   // height
+      const color = TRI_COLORS[(Math.random()*TRI_COLORS.length)|0];
+      // triangles sit on the floor
+      obstacles.push({
+        kind:'tri',
+        x: W + 40,
+        y: floorY,      // base line y
+        base, height: high,
+        color
+      });
+      // set next spawn cooldown to a safe, user-friendly range
+      world.spawnCooldown = randInt(world.nextSpawnMin, world.nextSpawnMax);
     }
 
-    // ===== State helpers =====
-    function hardResetInput(){
-      keys.up=false; keys.space=false; player.jumpBuffer=0;
-    }
+    // ===== Helpers =====
+    function randInt(a,b){ return (a + Math.random()*(b-a))|0; }
+    function hardResetInput(){ keys.up=false; keys.space=false; player.jumpBuffer=0; }
+
     function resetGame(){
       world.t=0; world.speed=world.baseSpeed; world.score=0;
-      world.spawnTimer=0; world.spawnInterval=80; world.difficultyTimer=0;
+      world.spawnCooldown = 40;      // short delay before first obstacle
+      world.nextSpawnMin = 110;      // reset wide gaps
+      world.nextSpawnMax = 170;
+      world.difficultyTimer = 0;
       player.y=floorY; player.vy=0; player.onGround=true;
       player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
       obstacles.length=0; hardResetInput();
@@ -142,7 +157,7 @@
         if(down && !world.alive){ startGame(); return; }     // start from menus
         if(down && world.alive){ player.jumpBuffer = BUFFER_FRAMES; } // buffer jump
       } else if(e.keyCode===KEY.R && down){
-        startGame(); // always allow R to restart
+        startGame(); // allow R anytime
       }
     }
     window.addEventListener('keydown', e=>keyHandler(e,true));
@@ -170,10 +185,12 @@
       world.t++;
 
       if(world.alive){
-        // difficulty ramp
-        if(world.t % 180 === 0){
-          world.speed = Math.min(world.speed + 0.6, world.maxSpeed);
-          world.spawnInterval = Math.max(40, world.spawnInterval - 4);
+        // difficulty ramp: speed up a bit and narrow gaps slightly over time
+        if(world.t % 240 === 0){ // ~every 4s
+          world.speed = Math.min(world.speed + 0.5, world.maxSpeed);
+          // gently reduce gap range but keep it reasonable
+          world.nextSpawnMin = Math.max(85, world.nextSpawnMin - 4);
+          world.nextSpawnMax = Math.max(120, world.nextSpawnMax - 6);
         }
 
         handlePlayerControls();
@@ -188,29 +205,24 @@
           player.onGround = false;
         }
 
-        // spawn & move obstacles
-        world.spawnTimer++;
-        if(world.spawnTimer >= world.spawnInterval){
-          world.spawnTimer = 0;
-          spawnObstacle();
-          if(Math.random()<0.25) setTimeout(spawnObstacle, 220 + Math.random()*280); // occasional close pair
-        }
+        // spawn & move obstacles (SAME SPEED AS ROAD)
+        if(world.spawnCooldown > 0) world.spawnCooldown--;
+        if(world.spawnCooldown <= 0) spawnTriangle();
+
         for(let i=obstacles.length-1;i>=0;i--){
           const o = obstacles[i];
-          o.x -= world.speed;
-          if(o.x + o.w < -100) obstacles.splice(i,1);
+          o.x -= world.speed; // ← same speed as road
+          if(o.x + o.base < -100) obstacles.splice(i,1);
         }
 
         // scoring
         world.score += 0.2 + world.speed*0.012;
 
-        // collisions
+        // collisions (triangle bounding box, generous)
         const pb = getPlayerBounds();
         for(const o of obstacles){
-          for(let s=0; s<o.stacks; s++){
-            const ob = { x:o.x, y:o.y - s*o.h, w:o.w, h:o.h };
-            if(rectsOverlap(pb, ob)){ gameOver(); }
-          }
+          const ob = { x:o.x, y:o.y - o.height, w:o.base, h:o.height };
+          if(rectsOverlap(pb, ob)){ gameOver(); break; }
         }
       }
 
@@ -220,7 +232,7 @@
 
     // ===== Bounds / Utils =====
     function getPlayerBounds(){
-      // tight-ish box under the PNG; bottom-centered
+      // Tight-ish box under the PNG; bottom-centered
       return { x: player.x - player.w*0.45, y: player.y - player.h, w: player.w*0.9, h: player.h*0.95 };
     }
     function rectsOverlap(a,b){
@@ -231,35 +243,33 @@
     function drawRoad(){
       ctx.fillStyle = '#2a2a2a';
       ctx.fillRect(0, floorY, W, H-floorY);
-      // optional lane hints
+      // lane hints scroll at half-rate—purely cosmetic
       ctx.fillStyle = 'rgba(255,255,255,.25)';
       const stripeW = 120, stripeH = 6;
       const phase = (world.t*world.speed*0.5) % (stripeW*2);
       for(let x=-phase; x<W; x+=stripeW*2){
-        ctx.fillRect(x, floorY+30, stripeW, stripeH);
-        ctx.fillRect(x+60, floorY+60, stripeW, stripeH);
+        ctx.fillRect(x,   floorY+30, stripeW, stripeH);
+        ctx.fillRect(x+60,floorY+60, stripeW, stripeH);
       }
     }
-    function drawObstacles(){
+
+    function drawTriangles(){
       for(const o of obstacles){
-        for(let s=0;s<o.stacks;s++){
-          const x=o.x, y=o.y - s*o.h, w=o.w, h=o.h;
-          if(o.type==='cone'){
-            ctx.fillStyle = '#ff7a00';
-            ctx.beginPath(); ctx.moveTo(x, y+h); ctx.lineTo(x+w/2, y); ctx.lineTo(x+w, y+h); ctx.closePath(); ctx.fill();
-            ctx.fillStyle = '#fff'; ctx.fillRect(x+w*0.15, y+h*0.6, w*0.7, h*0.12);
-          }else{
-            ctx.fillStyle = '#8b5a2b'; ctx.fillRect(x, y, w, h);
-            ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.strokeRect(x+2, y+2, w-4, h-4);
-          }
-        }
+        // filled isosceles triangle resting on floor
+        ctx.fillStyle = o.color;
+        ctx.beginPath();
+        ctx.moveTo(o.x,               o.y);
+        ctx.lineTo(o.x + o.base/2,    o.y - o.height);
+        ctx.lineTo(o.x + o.base,      o.y);
+        ctx.closePath();
+        ctx.fill();
       }
     }
+
     function drawVespa(){
       if(vespaReady){
         ctx.drawImage(vespaImg, player.x - player.w/2, player.y - player.h, player.w, player.h);
       }else{
-        // minimal fallback block so game still runs before image loads
         ctx.fillStyle = '#1e8bff';
         ctx.fillRect(player.x - player.w/2, player.y - player.h, player.w, player.h);
       }
@@ -267,10 +277,11 @@
       ctx.fillStyle = 'rgba(0,0,0,.16)';
       ctx.beginPath(); ctx.ellipse(player.x, player.y-2, player.w*0.44, 8, 0, 0, Math.PI*2); ctx.fill();
     }
+
     function draw(){
       ctx.clearRect(0,0,W,H);
       drawRoad();
-      drawObstacles();
+      drawTriangles();
       drawVespa();
     }
 
