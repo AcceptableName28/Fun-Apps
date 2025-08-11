@@ -15,7 +15,7 @@
   .board .muted{opacity:.65;font-weight:600}
   #wrap{display:grid;place-items:center}
   canvas{background:linear-gradient(#cfe9ff,#a6d4ff 60%);box-shadow:0 10px 40px rgba(0,0,0,.25);border-radius:14px;width:960px;height:540px}
-  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.85);text-align:center}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.85);text-align:center;z-index:10}
   .card{background:#fff;border-radius:14px;box-shadow:0 12px 36px rgba(0,0,0,.2);padding:20px 28px;min-width:320px}
   .btn{display:inline-block;background:#111;color:#fff;padding:10px 16px;border-radius:10px;font-weight:800;margin-top:10px;text-decoration:none}
   kbd{background:#111;color:#fff;border-radius:6px;padding:3px 6px;font-weight:700}
@@ -68,27 +68,22 @@
 </div>
 
 <script>
-/* ====== API BASE — your working Vercel deployment ====== */
+/* ====== API BASE (working deployment) ====== */
 const API_BASE = 'https://scooter-game-npkj143if-pauline-torres-projects.vercel.app';
-
 async function apiGetTop10(){
-  try{
-    const r = await fetch(`${API_BASE}/api/leaderboard`, { cache: 'no-store' });
-    if(!r.ok) return [];
-    return await r.json();
-  }catch{ return []; }
+  try{ const r = await fetch(`${API_BASE}/api/leaderboard`, { cache:'no-store' }); return r.ok ? r.json() : []; }
+  catch{ return []; }
 }
 async function apiSaveScore(name, score){
   const r = await fetch(`${API_BASE}/api/leaderboard`, {
-    method:'POST',
-    headers:{ 'Content-Type':'application/json' },
+    method:'POST', headers:{ 'Content-Type':'application/json' },
     body: JSON.stringify({ name, score })
   });
   if(!r.ok) throw new Error('save failed');
-  return await r.json();
+  return r.json();
 }
 
-/* ===== HiDPI Canvas (reduces shimmer) ===== */
+/* ===== HiDPI canvas ===== */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha:true });
 let DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -102,8 +97,7 @@ function resizeCanvas(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.imageSmoothingEnabled = true;
 }
-resizeCanvas();
-window.addEventListener('resize', resizeCanvas);
+resizeCanvas(); addEventListener('resize', resizeCanvas);
 
 /* ===== UI refs ===== */
 const startScreen = document.getElementById('startScreen');
@@ -119,73 +113,68 @@ const skipBtn     = document.getElementById('skipBtn');
 const lbEl        = document.getElementById('lb');
 const lbSub       = document.getElementById('lbSub');
 
-/* ===== Sprite (your PNG) ===== */
+/* ===== Sprite ===== */
 const vespaImg = new Image();
 vespaImg.src = 'Blue Vespa Right.png';
-let vespaReady = false;
-vespaImg.onload = () => vespaReady = true;
+let vespaReady = false; vespaImg.onload = ()=> vespaReady = true;
 
-/* ===== Physics / Tuning ===== */
+/* ===== Physics / tuning ===== */
 const W = 960, H = 540;
 const floorY = H * 0.78;
-const gravity       = 0.9;
-const JUMP_VEL_1    = -14.5;
-const JUMP_VEL_2    = -12.2;
-const COYOTE_FRAMES = 8;
-const BUFFER_FRAMES = 10;
+const gravity = 0.9;
+const JUMP_VEL_1 = -14.5, JUMP_VEL_2 = -12.2;
+const COYOTE_FRAMES = 8, BUFFER_FRAMES = 10;
 
-/* ===== World (harder when you do better) ===== */
+/* ===== World (distance-based spawns) ===== */
 const world = {
-  t: 0,
-  speed: 8,
-  baseSpeed: 8,
-  maxSpeed: 20,
-  score: 0,
-  best: Number(localStorage.getItem('vespa_best') || 0),
-  alive: false,
-  spawnCooldown: 0,
-  nextSpawnMin: 110,
-  nextSpawnMax: 170,
-  rampK: 0.018,
-  gapTightenEvery: 50,
-};
-function effectiveSpeed(){
-  return Math.min(world.maxSpeed, world.baseSpeed + world.score * world.rampK);
-}
+  t:0, speed:8, baseSpeed:8, maxSpeed:20, score:0, alive:false,
+  best: Number(localStorage.getItem('vespa_best')||0),
 
-/* ===== Input ===== */
+  // gaps are in pixels, not frames — scales naturally with speed
+  gapMin: 320,   // generous at start
+  gapMax: 520,
+  spawnDist: 300, // countdown (pixels) to next spawn
+
+  // difficulty
+  rampK: 0.020,          // speed grows with score faster than before
+  gapTightenEvery: 40,   // shrink gap range more often
+  gapMinFloor: 220,      // never go below this (keeps it fair)
+  gapMaxFloor: 360
+};
+function effectiveSpeed(){ return Math.min(world.maxSpeed, world.baseSpeed + world.score * world.rampK); }
+
+/* ===== Input / player ===== */
 const keys = { up:false, space:false };
-const KEY  = { UP:38, SPACE:32, R:82 };
-
-/* ===== Player ===== */
+const KEY = { UP:38, SPACE:32, R:82 };
 const PLAYER_W = 120, PLAYER_H = 80;
-const player = {
-  x: W*0.18, y: floorY, vy: 0,
-  w: PLAYER_W, h: PLAYER_H,
-  onGround: true, jumps: 0,
-  coyote: 0, jumpBuffer: 0, usedDouble: false
-};
+const player = { x:W*0.18, y:floorY, vy:0, w:PLAYER_W, h:PLAYER_H, onGround:true, jumps:0, coyote:0, jumpBuffer:0, usedDouble:false };
 
 /* ===== Obstacles (triangles) ===== */
 const TRI_COLORS = ['#ff6b6b','#ffd166','#06d6a0','#118ab2','#8338ec','#ef476f','#f9c74f','#90be6d'];
 const obstacles = [];
 function randInt(a,b){ return (a + Math.random()*(b-a))|0; }
-function spawnTriangle(){
-  const base  = 38 + Math.random()*48;
-  const high  = 44 + Math.random()*90;
+function spawnTriangleAt(x){
+  const base = 38 + Math.random()*48;
+  const high = 44 + Math.random()*90;
   const color = TRI_COLORS[(Math.random()*TRI_COLORS.length)|0];
-  obstacles.push({ kind:'tri', x: W+40, y: floorY, base, height: high, color });
-  world.spawnCooldown = randInt(world.nextSpawnMin, world.nextSpawnMax);
+  obstacles.push({ x, y:floorY, base, height:high, color });
+}
+function planNextSpawn(){
+  // estimate safe min gap from jump physics (airtime ~ 2*|vy|/g frames)
+  const airtimeFrames = (2*Math.abs(JUMP_VEL_1))/gravity; // ~32.2
+  const safePixels = Math.max(world.gapMinFloor, Math.min(world.gapMax, world.speed * airtimeFrames * 0.9));
+  const min = Math.max(world.gapMinFloor, Math.min(world.gapMin, safePixels));
+  const max = Math.max(world.gapMaxFloor, world.gapMax);
+  world.spawnDist = randInt(min, max);
 }
 
-/* ===== Leaderboard (global via API) ===== */
+/* ===== Leaderboard ===== */
 async function renderLB(){
   const lb = (await apiGetTop10()) || [];
   lbEl.innerHTML = '';
   lb.forEach((e,i)=>{
     const li = document.createElement('li');
-    const name = (e.name||'---').toUpperCase().slice(0,3);
-    li.innerHTML = `<span>${i+1}.) ${name}</span><span>${e.score}</span>`;
+    li.innerHTML = `<span>${i+1}.) ${(e.name||'---').toUpperCase().slice(0,3)}</span><span>${e.score}</span>`;
     lbEl.appendChild(li);
   });
   lbSub.textContent = lb.length ? 'Global leaderboard' : 'No scores yet — be the first!';
@@ -195,31 +184,16 @@ renderLB();
 /* ===== State helpers ===== */
 function hardResetInput(){ keys.up=false; keys.space=false; player.jumpBuffer=0; }
 function resetGame(){
-  world.t=0; world.score=0;
-  world.speed = world.baseSpeed;
-  world.spawnCooldown = 40;
-  world.nextSpawnMin = 110;
-  world.nextSpawnMax = 170;
-  player.y=floorY; player.vy=0; player.onGround=true;
-  player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
+  world.t=0; world.score=0; world.speed=world.baseSpeed;
+  world.gapMin=320; world.gapMax=520; world.spawnDist=300;
+  player.y=floorY; player.vy=0; player.onGround=true; player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
   obstacles.length=0; hardResetInput();
 }
-function startGame(){
-  resetGame();
-  world.alive = true;
-  startScreen.style.display='none';
-  gameOverEl.style.display='none';
-}
-let awaitingInitials = false;
-function gameOver(){
-  world.alive = false;
-  finalScore.textContent = Math.floor(world.score);
-  if(world.score > world.best){
-    world.best = Math.floor(world.score);
-    localStorage.setItem('vespa_best', world.best);
-  }
-  finalBest.textContent = world.best;
+function startGame(){ resetGame(); world.alive=true; startScreen.style.display='none'; gameOverEl.style.display='none'; }
+let awaitingInitials=false;
 
+/* ===== Game over & save flow (robust) ===== */
+function showGameOverAndMaybeAskInitials(){
   (async()=>{
     const lb = (await apiGetTop10()) || [];
     const minToBeat = lb.length < 10 ? 0 : (lb[9]?.score || 0);
@@ -230,50 +204,64 @@ function gameOver(){
     gameOverEl.style.display='flex';
     if(qualifies) setTimeout(()=>initialsEl.focus(), 80);
   })();
-
+}
+function gameOver(){
+  world.alive=false;
+  finalScore.textContent = Math.floor(world.score);
+  if(world.score>world.best){ world.best=Math.floor(world.score); localStorage.setItem('vespa_best', world.best); }
+  finalBest.textContent = world.best;
+  showGameOverAndMaybeAskInitials();
   hardResetInput();
 }
 
 /* ===== Input handlers ===== */
-function keyHandler(e, down){
+function keyHandler(e,down){
   if(e.keyCode===KEY.SPACE || e.keyCode===KEY.UP){
     if(down) e.preventDefault();
-    if(e.keyCode===KEY.SPACE) keys.space = down; else keys.up = down;
+    if(e.keyCode===KEY.SPACE) keys.space=down; else keys.up=down;
     if(down && !world.alive && !awaitingInitials){ startGame(); return; }
     if(down && world.alive){ player.jumpBuffer = BUFFER_FRAMES; }
   } else if(e.keyCode===KEY.R && down){
-    if(!awaitingInitials) startGame();
+    // R now restarts even if initials are showing (tries to save if provided)
+    doRestartFlow();
   }
 }
-window.addEventListener('keydown', e=>keyHandler(e,true));
-window.addEventListener('keyup',   e=>keyHandler(e,false));
-startBtn.addEventListener('click',   e=>{ e.preventDefault(); startGame(); });
-restartBtn.addEventListener('click', e=>{ e.preventDefault(); if(!awaitingInitials) startGame(); });
+addEventListener('keydown', e=>keyHandler(e,true));
+addEventListener('keyup',   e=>keyHandler(e,false));
 
-/* ===== Initials input constraints ===== */
+startBtn.addEventListener('click', e=>{ e.preventDefault(); startGame(); });
+
+/* Save / Skip / Restart buttons (hardened) */
 function sanitizeInitials(s){ return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,3); }
 initialsEl.addEventListener('input', ()=>{
   const clean = sanitizeInitials(initialsEl.value);
-  if(initialsEl.value !== clean) initialsEl.value = clean;
+  if(initialsEl.value!==clean) initialsEl.value=clean;
 });
-saveScoreBtn.addEventListener('click', async (e)=>{
-  e.preventDefault();
+
+async function trySaveIfNeeded(){
   const name = sanitizeInitials(initialsEl.value);
-  if(name.length<1){ initialsEl.focus(); return; }
-  try {
+  if(!awaitingInitials) return true; // nothing to save
+  if(name.length<1) return true;     // treat empty as skip
+  try{
     await apiSaveScore(name, Math.floor(world.score));
     await renderLB();
-    awaitingInitials = false;
-    startGame();
-  } catch(err) {
-    alert('Could not save score. Try again in a moment.');
+    return true;
+  }catch(err){
+    alert('Could not save score right now. Starting a new round.');
+    return false; // even if fail, we’ll still restart below
   }
-});
-skipBtn.addEventListener('click', e=>{
-  e.preventDefault();
-  awaitingInitials = false;
+}
+
+async function doRestartFlow(){
+  // Try save; regardless of result, exit game over and restart
+  await trySaveIfNeeded();
+  awaitingInitials=false;
   startGame();
-});
+}
+
+saveScoreBtn.addEventListener('click', async e=>{ e.preventDefault(); await doRestartFlow(); });
+skipBtn     .addEventListener('click', async e=>{ e.preventDefault(); awaitingInitials=false; startGame(); });
+restartBtn  .addEventListener('click', async e=>{ e.preventDefault(); await doRestartFlow(); });
 
 /* ===== Gameplay ===== */
 function handlePlayerControls(){
@@ -285,91 +273,90 @@ function handlePlayerControls(){
     player.vy = JUMP_VEL_2; player.usedDouble=true; player.jumps=2; player.jumpBuffer=0;
   }
 }
+
 function update(){
   world.t++;
   if(world.alive){
+    // difficulty: speed ramps with score
     world.speed = effectiveSpeed();
+
+    // periodically tighten gap windows (but keep floors for fairness)
     if(Math.floor(world.score) % world.gapTightenEvery === 0 && world.score>0 && world.t % 10 === 0){
-      world.nextSpawnMin = Math.max(70, world.nextSpawnMin - 1);
-      world.nextSpawnMax = Math.max(110, world.nextSpawnMax - 1);
+      world.gapMin = Math.max(world.gapMinFloor, world.gapMin - 6);
+      world.gapMax = Math.max(world.gapMaxFloor, world.gapMax - 8);
     }
+
     handlePlayerControls();
+
+    // physics
     player.vy += gravity; player.y += player.vy;
-    if(player.y >= floorY){
-      player.y = floorY; player.vy = 0;
-      if(!player.onGround){ player.onGround=true; player.usedDouble=false; player.jumps=0; }
-    } else { player.onGround = false; }
+    if(player.y >= floorY){ player.y=floorY; player.vy=0; if(!player.onGround){ player.onGround=true; player.usedDouble=false; player.jumps=0; } }
+    else { player.onGround=false; }
 
-    if(world.spawnCooldown > 0) world.spawnCooldown--;
-    if(world.spawnCooldown <= 0) spawnTriangle();
-
+    // move obstacles
     for(let i=obstacles.length-1;i>=0;i--){
-      const o = obstacles[i];
-      o.x -= world.speed;
-      if(o.x + o.base < -100) obstacles.splice(i,1);
+      const o = obstacles[i]; o.x -= world.speed; if(o.x + o.base < -120) obstacles.splice(i,1);
     }
 
-    world.score += 0.22 + world.speed*0.012;
+    // distance-based spawning (more triangles, still fair)
+    world.spawnDist -= world.speed;
+    if(world.spawnDist <= 0){
+      const startX = W + 40;
+      spawnTriangleAt(startX);
+      // small chance to add a second one after a safe sub-gap
+      if(Math.random()<0.35){
+        const subGap = Math.max(world.gapMinFloor*0.55, Math.min(200 + world.speed*10, world.gapMin*0.75));
+        spawnTriangleAt(startX + subGap);
+      }
+      planNextSpawn();
+    }
 
+    // scoring
+    world.score += 0.24 + world.speed*0.013;
+
+    // collisions (AABB vs triangle’s bounding box — generous)
     const pb = getPlayerBounds();
     for(const o of obstacles){
       const ob = { x:o.x, y:o.y - o.height, w:o.base, h:o.height };
       if(rectsOverlap(pb, ob)){ gameOver(); break; }
     }
   }
+
   draw();
   requestAnimationFrame(update);
 }
 
 /* ===== Bounds / Utils ===== */
-function getPlayerBounds(){
-  return { x: player.x - player.w*0.45, y: player.y - player.h, w: player.w*0.9, h: player.h*0.95 };
-}
-function rectsOverlap(a,b){
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
+function getPlayerBounds(){ return { x: player.x - player.w*0.45, y: player.y - player.h, w: player.w*0.9, h: player.h*0.95 }; }
+function rectsOverlap(a,b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
 
 /* ===== Drawing ===== */
 function drawRoad(){
-  ctx.fillStyle = '#2a2a2a';
-  ctx.fillRect(0, floorY, W, H-floorY);
+  ctx.fillStyle = '#2a2a2a'; ctx.fillRect(0, floorY, W, H-floorY);
   ctx.fillStyle = 'rgba(255,255,255,.25)';
-  const stripeW = 120, stripeH = 6;
-  const phase = (world.t*world.speed*0.5) % (stripeW*2);
+  const stripeW=120, stripeH=6, phase=(world.t*world.speed*0.5)%(stripeW*2);
   for(let x=-phase; x<W; x+=stripeW*2){
-    const xx1 = Math.round(x);
-    const xx2 = Math.round(x+60);
+    const xx1=Math.round(x), xx2=Math.round(x+60);
     ctx.fillRect(xx1, floorY+30, stripeW, stripeH);
     ctx.fillRect(xx2, floorY+60, stripeW, stripeH);
   }
 }
 function drawTriangles(){
   for(const o of obstacles){
-    ctx.fillStyle = o.color;
-    ctx.beginPath();
-    const x0 = Math.round(o.x);
-    const y0 = Math.round(o.y);
-    const x1 = Math.round(o.x + o.base/2);
-    const y1 = Math.round(o.y - o.height);
-    const x2 = Math.round(o.x + o.base);
-    ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y0);
-    ctx.closePath(); ctx.fill();
+    ctx.fillStyle=o.color; ctx.beginPath();
+    const x0=Math.round(o.x), y0=Math.round(o.y);
+    const x1=Math.round(o.x+o.base/2), y1=Math.round(o.y-o.height);
+    const x2=Math.round(o.x+o.base);
+    ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.lineTo(x2,y0); ctx.closePath(); ctx.fill();
   }
 }
 function drawVespa(){
-  if(vespaReady){
-    ctx.drawImage(vespaImg, Math.round(player.x - player.w/2), Math.round(player.y - player.h), player.w, player.h);
-  }else{
-    ctx.fillStyle = '#1e8bff';
-    ctx.fillRect(Math.round(player.x - player.w/2), Math.round(player.y - player.h), player.w, player.h);
-  }
-  ctx.fillStyle = 'rgba(0,0,0,.16)';
-  ctx.beginPath(); ctx.ellipse(player.x, player.y-2, player.w*0.44, 8, 0, 0, Math.PI*2); ctx.fill();
+  if(vespaReady){ ctx.drawImage(vespaImg, Math.round(player.x-player.w/2), Math.round(player.y-player.h), player.w, player.h); }
+  else { ctx.fillStyle='#1e8bff'; ctx.fillRect(Math.round(player.x-player.w/2), Math.round(player.y-player.h), player.w, player.h); }
+  ctx.fillStyle='rgba(0,0,0,.16)'; ctx.beginPath(); ctx.ellipse(player.x, player.y-2, player.w*0.44, 8, 0, 0, Math.PI*2); ctx.fill();
 }
-function draw(){
-  ctx.clearRect(0,0,W,H);
-  drawRoad(); drawTriangles(); drawVespa();
-}
+function draw(){ ctx.clearRect(0,0,W,H); drawRoad(); drawTriangles(); drawVespa(); }
+
 update();
 </script>
 </body>
