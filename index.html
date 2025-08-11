@@ -8,13 +8,11 @@
   :root { --sky:#cfe9ff; --road:#2a2a2a; --ink:#111; }
   html,body{height:100%;margin:0;background:var(--sky);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
   #page{display:grid;grid-template-rows:auto 1fr;min-height:100vh}
-  /* Leaderboard */
   .board{padding:10px 14px 0 14px}
   .board h2{margin:8px 0 6px 0;font-size:16px}
   .board ol{margin:0;padding-left:20px;display:grid;gap:2px;max-width:960px}
   .board li{font-weight:700;color:var(--ink);display:flex;justify-content:space-between}
   .board .muted{opacity:.65;font-weight:600}
-  /* Game area */
   #wrap{display:grid;place-items:center}
   canvas{background:linear-gradient(#cfe9ff,#a6d4ff 60%);box-shadow:0 10px 40px rgba(0,0,0,.25);border-radius:14px;width:960px;height:540px}
   .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.85);text-align:center}
@@ -30,20 +28,17 @@
 </head>
 <body>
 <div id="page">
-  <!-- Leaderboard -->
   <div class="board">
     <h2>🏁 Top 10 Scores</h2>
     <ol id="lb"></ol>
     <div class="muted" id="lbSub">Loading…</div>
   </div>
 
-  <!-- Game -->
   <div id="wrap">
     <canvas id="game" width="960" height="540" aria-label="Vespa Jump game"></canvas>
   </div>
 </div>
 
-<!-- Start -->
 <div id="startScreen" class="overlay">
   <div class="card">
     <h1 style="margin:0 0 8px">🛵 Vespa Jump</h1>
@@ -52,7 +47,6 @@
   </div>
 </div>
 
-<!-- Game Over -->
 <div id="gameOver" class="overlay" style="display:none">
   <div class="card">
     <h2 style="margin:0 0 8px">Game Over</h2>
@@ -74,8 +68,8 @@
 </div>
 
 <script>
-  
-const API_BASE = 'https://scooter-game-api.vercel.app/';
+/* ====== CONFIG: replace with your deployed Vercel URL ====== */
+const API_BASE = 'https://scooter-game-iep4wwmvi-pauline-torres-projects.vercel.app'; // e.g. https://scootergameapi.vercel.app
 
 async function apiGetTop10(){
   try{
@@ -94,7 +88,7 @@ async function apiSaveScore(name, score){
   return await r.json();
 }
 
-/* ===== HiDPI Canvas Setup (kills shimmer/pixel crawl) ===== */
+/* ===== HiDPI Canvas (reduces shimmer) ===== */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha:true });
 let DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -127,41 +121,35 @@ const lbSub       = document.getElementById('lbSub');
 
 /* ===== Sprite (your PNG) ===== */
 const vespaImg = new Image();
-vespaImg.src = 'Blue Vespa Right.png'; // keep next to this HTML
+vespaImg.src = 'Blue Vespa Right.png';
 let vespaReady = false;
 vespaImg.onload = () => vespaReady = true;
 
 /* ===== Physics / Tuning ===== */
 const W = 960, H = 540;
 const floorY = H * 0.78;
-const gravity       = 0.9;      // snappy fall
-const JUMP_VEL_1    = -14.5;    // first jump
-const JUMP_VEL_2    = -12.2;    // double jump
-const COYOTE_FRAMES = 8;        // grace frames after leaving ground
-const BUFFER_FRAMES = 10;       // queue jump presses
+const gravity       = 0.9;
+const JUMP_VEL_1    = -14.5;
+const JUMP_VEL_2    = -12.2;
+const COYOTE_FRAMES = 8;
+const BUFFER_FRAMES = 10;
 
-/* ===== World (harder faster if you play well) ===== */
+/* ===== World (harder when you do better) ===== */
 const world = {
   t: 0,
-  speed: 8,         // base road speed
+  speed: 8,
   baseSpeed: 8,
-  maxSpeed: 20,     // higher cap
+  maxSpeed: 20,
   score: 0,
   best: Number(localStorage.getItem('vespa_best') || 0),
   alive: false,
-
-  // user-friendly gaps that tighten with score
   spawnCooldown: 0,
   nextSpawnMin: 110,
   nextSpawnMax: 170,
-
-  // performance-based ramp: speed and gaps react to score
-  rampK: 0.018,        // how much score affects speed
-  gapTightenEvery: 50, // every +50 score, tighten gaps slightly
+  rampK: 0.018,
+  gapTightenEvery: 50,
 };
-
 function effectiveSpeed(){
-  // Speed grows with score; capped
   return Math.min(world.maxSpeed, world.baseSpeed + world.score * world.rampK);
 }
 
@@ -170,8 +158,7 @@ const keys = { up:false, space:false };
 const KEY  = { UP:38, SPACE:32, R:82 };
 
 /* ===== Player ===== */
-const PLAYER_W = 120;
-const PLAYER_H = 80;
+const PLAYER_W = 120, PLAYER_H = 80;
 const player = {
   x: W*0.18, y: floorY, vy: 0,
   w: PLAYER_W, h: PLAYER_H,
@@ -183,23 +170,12 @@ const player = {
 const TRI_COLORS = ['#ff6b6b','#ffd166','#06d6a0','#118ab2','#8338ec','#ef476f','#f9c74f','#90be6d'];
 const obstacles = [];
 function randInt(a,b){ return (a + Math.random()*(b-a))|0; }
-
 function spawnTriangle(){
-  const base  = 38 + Math.random()*48;   // width
-  const high  = 44 + Math.random()*90;   // height
+  const base  = 38 + Math.random()*48;
+  const high  = 44 + Math.random()*90;
   const color = TRI_COLORS[(Math.random()*TRI_COLORS.length)|0];
-
-  obstacles.push({
-    kind:'tri',
-    x: W + 40,
-    y: floorY,
-    base, height: high,
-    color
-  });
-
-  const min = world.nextSpawnMin;
-  const max = world.nextSpawnMax;
-  world.spawnCooldown = randInt(min, max); // wider gaps to start
+  obstacles.push({ kind:'tri', x: W+40, y: floorY, base, height: high, color });
+  world.spawnCooldown = randInt(world.nextSpawnMin, world.nextSpawnMax);
 }
 
 /* ===== Leaderboard (global via API) ===== */
@@ -224,7 +200,6 @@ function resetGame(){
   world.spawnCooldown = 40;
   world.nextSpawnMin = 110;
   world.nextSpawnMax = 170;
-
   player.y=floorY; player.vy=0; player.onGround=true;
   player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
   obstacles.length=0; hardResetInput();
@@ -245,7 +220,6 @@ function gameOver(){
   }
   finalBest.textContent = world.best;
 
-  // simple qualify rule: top 10 or beat #10
   (async()=>{
     const lb = (await apiGetTop10()) || [];
     const minToBeat = lb.length < 10 ? 0 : (lb[9]?.score || 0);
@@ -265,10 +239,10 @@ function keyHandler(e, down){
   if(e.keyCode===KEY.SPACE || e.keyCode===KEY.UP){
     if(down) e.preventDefault();
     if(e.keyCode===KEY.SPACE) keys.space = down; else keys.up = down;
-    if(down && !world.alive && !awaitingInitials){ startGame(); return; }  // start from menus
-    if(down && world.alive){ player.jumpBuffer = BUFFER_FRAMES; }          // buffer jump
+    if(down && !world.alive && !awaitingInitials){ startGame(); return; }
+    if(down && world.alive){ player.jumpBuffer = BUFFER_FRAMES; }
   } else if(e.keyCode===KEY.R && down){
-    if(!awaitingInitials) startGame(); // don't clobber initials prompt
+    if(!awaitingInitials) startGame();
   }
 }
 window.addEventListener('keydown', e=>keyHandler(e,true));
@@ -277,13 +251,10 @@ startBtn.addEventListener('click',   e=>{ e.preventDefault(); startGame(); });
 restartBtn.addEventListener('click', e=>{ e.preventDefault(); if(!awaitingInitials) startGame(); });
 
 /* ===== Initials input constraints ===== */
-function sanitizeInitials(s){
-  return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,3);
-}
+function sanitizeInitials(s){ return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,3); }
 initialsEl.addEventListener('input', ()=>{
-  const cur = initialsEl.value;
-  const clean = sanitizeInitials(cur);
-  if(cur!==clean) initialsEl.value = clean;
+  const clean = sanitizeInitials(initialsEl.value);
+  if(initialsEl.value !== clean) initialsEl.value = clean;
 });
 saveScoreBtn.addEventListener('click', async (e)=>{
   e.preventDefault();
@@ -308,41 +279,27 @@ skipBtn.addEventListener('click', e=>{
 function handlePlayerControls(){
   if(player.onGround) player.coyote = COYOTE_FRAMES; else if(player.coyote>0) player.coyote--;
   if(player.jumpBuffer>0) player.jumpBuffer--;
-
   if(player.jumpBuffer>0 && (player.onGround || player.coyote>0)){
     player.vy = JUMP_VEL_1; player.onGround=false; player.jumps=1; player.usedDouble=false; player.jumpBuffer=0;
-  }
-  else if(player.jumpBuffer>0 && !player.onGround && !player.usedDouble){
+  } else if(player.jumpBuffer>0 && !player.onGround && !player.usedDouble){
     player.vy = JUMP_VEL_2; player.usedDouble=true; player.jumps=2; player.jumpBuffer=0;
   }
 }
-
 function update(){
   world.t++;
-
   if(world.alive){
-    // performance-based difficulty
     world.speed = effectiveSpeed();
-
-    // also tighten gaps every +50 score (but keep playable)
     if(Math.floor(world.score) % world.gapTightenEvery === 0 && world.score>0 && world.t % 10 === 0){
       world.nextSpawnMin = Math.max(70, world.nextSpawnMin - 1);
       world.nextSpawnMax = Math.max(110, world.nextSpawnMax - 1);
     }
-
     handlePlayerControls();
-
-    // physics
-    player.vy += gravity;
-    player.y  += player.vy;
+    player.vy += gravity; player.y += player.vy;
     if(player.y >= floorY){
       player.y = floorY; player.vy = 0;
       if(!player.onGround){ player.onGround=true; player.usedDouble=false; player.jumps=0; }
-    } else {
-      player.onGround = false;
-    }
+    } else { player.onGround = false; }
 
-    // spawn & move obstacles (same speed as road)
     if(world.spawnCooldown > 0) world.spawnCooldown--;
     if(world.spawnCooldown <= 0) spawnTriangle();
 
@@ -352,24 +309,20 @@ function update(){
       if(o.x + o.base < -100) obstacles.splice(i,1);
     }
 
-    // scoring
     world.score += 0.22 + world.speed*0.012;
 
-    // collisions (triangle bounding box)
     const pb = getPlayerBounds();
     for(const o of obstacles){
       const ob = { x:o.x, y:o.y - o.height, w:o.base, h:o.height };
       if(rectsOverlap(pb, ob)){ gameOver(); break; }
     }
   }
-
   draw();
   requestAnimationFrame(update);
 }
 
 /* ===== Bounds / Utils ===== */
 function getPlayerBounds(){
-  // tight-ish box under the PNG; bottom-centered
   return { x: player.x - player.w*0.45, y: player.y - player.h, w: player.w*0.9, h: player.h*0.95 };
 }
 function rectsOverlap(a,b){
@@ -380,7 +333,6 @@ function rectsOverlap(a,b){
 function drawRoad(){
   ctx.fillStyle = '#2a2a2a';
   ctx.fillRect(0, floorY, W, H-floorY);
-  // lane hints scroll at half-rate—cosmetic, snapped to ints to reduce shimmer
   ctx.fillStyle = 'rgba(255,255,255,.25)';
   const stripeW = 120, stripeH = 6;
   const phase = (world.t*world.speed*0.5) % (stripeW*2);
@@ -391,25 +343,19 @@ function drawRoad(){
     ctx.fillRect(xx2, floorY+60, stripeW, stripeH);
   }
 }
-
 function drawTriangles(){
   for(const o of obstacles){
     ctx.fillStyle = o.color;
     ctx.beginPath();
-    // snap vertices to integers to reduce raster jitter
     const x0 = Math.round(o.x);
     const y0 = Math.round(o.y);
     const x1 = Math.round(o.x + o.base/2);
     const y1 = Math.round(o.y - o.height);
     const x2 = Math.round(o.x + o.base);
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x1, y1);
-    ctx.lineTo(x2, y0);
-    ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y0);
+    ctx.closePath(); ctx.fill();
   }
 }
-
 function drawVespa(){
   if(vespaReady){
     ctx.drawImage(vespaImg, Math.round(player.x - player.w/2), Math.round(player.y - player.h), player.w, player.h);
@@ -417,19 +363,13 @@ function drawVespa(){
     ctx.fillStyle = '#1e8bff';
     ctx.fillRect(Math.round(player.x - player.w/2), Math.round(player.y - player.h), player.w, player.h);
   }
-  // shadow
   ctx.fillStyle = 'rgba(0,0,0,.16)';
   ctx.beginPath(); ctx.ellipse(player.x, player.y-2, player.w*0.44, 8, 0, 0, Math.PI*2); ctx.fill();
 }
-
 function draw(){
   ctx.clearRect(0,0,W,H);
-  drawRoad();
-  drawTriangles();
-  drawVespa();
+  drawRoad(); drawTriangles(); drawVespa();
 }
-
-// go
 update();
 </script>
 </body>
