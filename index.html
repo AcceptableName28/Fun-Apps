@@ -68,22 +68,31 @@
 </div>
 
 <script>
-/* ====== API BASE (working deployment) ====== */
+/* ====== API BASE (your live alias) ====== */
 const API_BASE = 'https://scooter-game-api.vercel.app';
+
+/* ====== API helpers ====== */
 async function apiGetTop10(){
-  try{ const r = await fetch(`${API_BASE}/api/leaderboard`, { cache:'no-store' }); return r.ok ? r.json() : []; }
-  catch{ return []; }
+  try{
+    const r = await fetch(`${API_BASE}/api/leaderboard`, { cache: 'no-store' });
+    if(!r.ok) return [];
+    return await r.json();
+  }catch{ return []; }
 }
 async function apiSaveScore(name, score){
   const r = await fetch(`${API_BASE}/api/leaderboard`, {
-    method:'POST', headers:{ 'Content-Type':'application/json' },
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
     body: JSON.stringify({ name, score })
   });
-  if(!r.ok) throw new Error('save failed');
-  return r.json();
+  // Robust parse to show real errors if any
+  const text = await r.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if(!r.ok) throw new Error(data?.error || text || 'save failed');
+  return data;
 }
 
-/* ===== HiDPI canvas ===== */
+/* ===== HiDPI Canvas ===== */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha:true });
 let DPR = Math.max(1, Math.floor(window.devicePixelRatio || 1));
@@ -97,7 +106,8 @@ function resizeCanvas(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   ctx.imageSmoothingEnabled = true;
 }
-resizeCanvas(); addEventListener('resize', resizeCanvas);
+resizeCanvas();
+addEventListener('resize', resizeCanvas);
 
 /* ===== UI refs ===== */
 const startScreen = document.getElementById('startScreen');
@@ -113,54 +123,71 @@ const skipBtn     = document.getElementById('skipBtn');
 const lbEl        = document.getElementById('lb');
 const lbSub       = document.getElementById('lbSub');
 
-/* ===== Sprite ===== */
+/* ===== Sprite (your PNG) ===== */
 const vespaImg = new Image();
 vespaImg.src = 'Blue Vespa Right.png';
-let vespaReady = false; vespaImg.onload = ()=> vespaReady = true;
+let vespaReady = false;
+vespaImg.onload = () => vespaReady = true;
 
-/* ===== Physics / tuning ===== */
+/* ===== Physics / Tuning ===== */
 const W = 960, H = 540;
 const floorY = H * 0.78;
-const gravity = 0.9;
-const JUMP_VEL_1 = -14.5, JUMP_VEL_2 = -12.2;
-const COYOTE_FRAMES = 8, BUFFER_FRAMES = 10;
+const gravity       = 0.9;
+const JUMP_VEL_1    = -14.5;
+const JUMP_VEL_2    = -12.2;
+const COYOTE_FRAMES = 8;
+const BUFFER_FRAMES = 10;
 
-/* ===== World (distance-based spawns) ===== */
+/* ===== World (harder when you do better) ===== */
 const world = {
-  t:0, speed:8, baseSpeed:8, maxSpeed:20, score:0, alive:false,
-  best: Number(localStorage.getItem('vespa_best')||0),
+  t: 0,
+  speed: 8,
+  baseSpeed: 8,
+  maxSpeed: 20,
+  score: 0,
+  best: Number(localStorage.getItem('vespa_best') || 0),
+  alive: false,
 
-  // gaps are in pixels, not frames — scales naturally with speed
+  // distance-based spawns
   gapMin: 320,   // generous at start
   gapMax: 520,
-  spawnDist: 300, // countdown (pixels) to next spawn
+  spawnDist: 300,
 
   // difficulty
-  rampK: 0.020,          // speed grows with score faster than before
-  gapTightenEvery: 40,   // shrink gap range more often
-  gapMinFloor: 220,      // never go below this (keeps it fair)
+  rampK: 0.020,        // speed increases with score
+  gapTightenEvery: 40, // tighten spacing more often
+  gapMinFloor: 220,    // never tighter than this
   gapMaxFloor: 360
 };
-function effectiveSpeed(){ return Math.min(world.maxSpeed, world.baseSpeed + world.score * world.rampK); }
+function effectiveSpeed(){
+  return Math.min(world.maxSpeed, world.baseSpeed + world.score * world.rampK);
+}
 
-/* ===== Input / player ===== */
+/* ===== Input ===== */
 const keys = { up:false, space:false };
-const KEY = { UP:38, SPACE:32, R:82 };
+const KEY  = { UP:38, SPACE:32, R:82 };
+
+/* ===== Player ===== */
 const PLAYER_W = 120, PLAYER_H = 80;
-const player = { x:W*0.18, y:floorY, vy:0, w:PLAYER_W, h:PLAYER_H, onGround:true, jumps:0, coyote:0, jumpBuffer:0, usedDouble:false };
+const player = {
+  x: W*0.18, y: floorY, vy: 0,
+  w: PLAYER_W, h: PLAYER_H,
+  onGround: true, jumps: 0,
+  coyote: 0, jumpBuffer: 0, usedDouble: false
+};
 
 /* ===== Obstacles (triangles) ===== */
 const TRI_COLORS = ['#ff6b6b','#ffd166','#06d6a0','#118ab2','#8338ec','#ef476f','#f9c74f','#90be6d'];
 const obstacles = [];
 function randInt(a,b){ return (a + Math.random()*(b-a))|0; }
 function spawnTriangleAt(x){
-  const base = 38 + Math.random()*48;
-  const high = 44 + Math.random()*90;
+  const base  = 38 + Math.random()*48;
+  const high  = 44 + Math.random()*90;
   const color = TRI_COLORS[(Math.random()*TRI_COLORS.length)|0];
-  obstacles.push({ x, y:floorY, base, height:high, color });
+  obstacles.push({ x, y: floorY, base, height: high, color });
 }
 function planNextSpawn(){
-  // estimate safe min gap from jump physics (airtime ~ 2*|vy|/g frames)
+  // Estimate safe min gap from jump physics
   const airtimeFrames = (2*Math.abs(JUMP_VEL_1))/gravity; // ~32.2
   const safePixels = Math.max(world.gapMinFloor, Math.min(world.gapMax, world.speed * airtimeFrames * 0.9));
   const min = Math.max(world.gapMinFloor, Math.min(world.gapMin, safePixels));
@@ -174,7 +201,8 @@ async function renderLB(){
   lbEl.innerHTML = '';
   lb.forEach((e,i)=>{
     const li = document.createElement('li');
-    li.innerHTML = `<span>${i+1}.) ${(e.name||'---').toUpperCase().slice(0,3)}</span><span>${e.score}</span>`;
+    const name = (e.name||'---').toUpperCase().slice(0,3);
+    li.innerHTML = `<span>${i+1}.) ${name}</span><span>${e.score}</span>`;
     lbEl.appendChild(li);
   });
   lbSub.textContent = lb.length ? 'Global leaderboard' : 'No scores yet — be the first!';
@@ -184,16 +212,26 @@ renderLB();
 /* ===== State helpers ===== */
 function hardResetInput(){ keys.up=false; keys.space=false; player.jumpBuffer=0; }
 function resetGame(){
-  world.t=0; world.score=0; world.speed=world.baseSpeed;
+  world.t=0; world.score=0;
+  world.speed = world.baseSpeed;
   world.gapMin=320; world.gapMax=520; world.spawnDist=300;
-  player.y=floorY; player.vy=0; player.onGround=true; player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
+  player.y=floorY; player.vy=0; player.onGround=true;
+  player.jumps=0; player.usedDouble=false; player.coyote=0; player.jumpBuffer=0;
   obstacles.length=0; hardResetInput();
 }
-function startGame(){ resetGame(); world.alive=true; startScreen.style.display='none'; gameOverEl.style.display='none'; }
-let awaitingInitials=false;
+function startGame(){ resetGame(); world.alive = true; startScreen.style.display='none'; gameOverEl.style.display='none'; }
+let awaitingInitials = false;
 
-/* ===== Game over & save flow (robust) ===== */
-function showGameOverAndMaybeAskInitials(){
+/* ===== Game over & save flow ===== */
+function gameOver(){
+  world.alive = false;
+  finalScore.textContent = Math.floor(world.score);
+  if(world.score > world.best){
+    world.best = Math.floor(world.score);
+    localStorage.setItem('vespa_best', world.best);
+  }
+  finalBest.textContent = world.best;
+
   (async()=>{
     const lb = (await apiGetTop10()) || [];
     const minToBeat = lb.length < 10 ? 0 : (lb[9]?.score || 0);
@@ -204,61 +242,59 @@ function showGameOverAndMaybeAskInitials(){
     gameOverEl.style.display='flex';
     if(qualifies) setTimeout(()=>initialsEl.focus(), 80);
   })();
-}
-function gameOver(){
-  world.alive=false;
-  finalScore.textContent = Math.floor(world.score);
-  if(world.score>world.best){ world.best=Math.floor(world.score); localStorage.setItem('vespa_best', world.best); }
-  finalBest.textContent = world.best;
-  showGameOverAndMaybeAskInitials();
+
   hardResetInput();
 }
 
 /* ===== Input handlers ===== */
-function keyHandler(e,down){
+function keyHandler(e, down){
   if(e.keyCode===KEY.SPACE || e.keyCode===KEY.UP){
     if(down) e.preventDefault();
-    if(e.keyCode===KEY.SPACE) keys.space=down; else keys.up=down;
+    if(e.keyCode===KEY.SPACE) keys.space = down; else keys.up = down;
     if(down && !world.alive && !awaitingInitials){ startGame(); return; }
     if(down && world.alive){ player.jumpBuffer = BUFFER_FRAMES; }
   } else if(e.keyCode===KEY.R && down){
-    // R now restarts even if initials are showing (tries to save if provided)
-    doRestartFlow();
+    doRestartFlow(); // restart even if initials box is up
   }
 }
 addEventListener('keydown', e=>keyHandler(e,true));
 addEventListener('keyup',   e=>keyHandler(e,false));
-
 startBtn.addEventListener('click', e=>{ e.preventDefault(); startGame(); });
 
-/* Save / Skip / Restart buttons (hardened) */
+/* ===== Initials input constraints ===== */
 function sanitizeInitials(s){ return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,3); }
 initialsEl.addEventListener('input', ()=>{
   const clean = sanitizeInitials(initialsEl.value);
-  if(initialsEl.value!==clean) initialsEl.value=clean;
+  if(initialsEl.value !== clean) initialsEl.value = clean;
 });
 
+/* ===== Save/Skip/Restart (robust) ===== */
+function setSaving(state){
+  saveScoreBtn.textContent = state ? 'Saving…' : 'Save';
+  saveScoreBtn.style.opacity = state ? '.7' : '1';
+  saveScoreBtn.style.pointerEvents = state ? 'none' : 'auto';
+}
 async function trySaveIfNeeded(){
   const name = sanitizeInitials(initialsEl.value);
   if(!awaitingInitials) return true; // nothing to save
-  if(name.length<1) return true;     // treat empty as skip
+  if(name.length < 1) return true;   // treat empty as skip
   try{
+    setSaving(true);
     await apiSaveScore(name, Math.floor(world.score));
     await renderLB();
     return true;
   }catch(err){
-    alert('Could not save score right now. Starting a new round.');
-    return false; // even if fail, we’ll still restart below
+    alert('Save failed: ' + (err.message || err));
+    return false;
+  }finally{
+    setSaving(false);
   }
 }
-
 async function doRestartFlow(){
-  // Try save; regardless of result, exit game over and restart
   await trySaveIfNeeded();
-  awaitingInitials=false;
+  awaitingInitials = false;
   startGame();
 }
-
 saveScoreBtn.addEventListener('click', async e=>{ e.preventDefault(); await doRestartFlow(); });
 skipBtn     .addEventListener('click', async e=>{ e.preventDefault(); awaitingInitials=false; startGame(); });
 restartBtn  .addEventListener('click', async e=>{ e.preventDefault(); await doRestartFlow(); });
@@ -277,10 +313,10 @@ function handlePlayerControls(){
 function update(){
   world.t++;
   if(world.alive){
-    // difficulty: speed ramps with score
+    // Difficulty ramp
     world.speed = effectiveSpeed();
 
-    // periodically tighten gap windows (but keep floors for fairness)
+    // Tighten gap windows periodically (keep floors for fairness)
     if(Math.floor(world.score) % world.gapTightenEvery === 0 && world.score>0 && world.t % 10 === 0){
       world.gapMin = Math.max(world.gapMinFloor, world.gapMin - 6);
       world.gapMax = Math.max(world.gapMaxFloor, world.gapMax - 8);
@@ -288,22 +324,22 @@ function update(){
 
     handlePlayerControls();
 
-    // physics
+    // Physics
     player.vy += gravity; player.y += player.vy;
-    if(player.y >= floorY){ player.y=floorY; player.vy=0; if(!player.onGround){ player.onGround=true; player.usedDouble=false; player.jumps=0; } }
-    else { player.onGround=false; }
+    if(player.y >= floorY){ player.y = floorY; player.vy = 0; if(!player.onGround){ player.onGround=true; player.usedDouble=false; player.jumps=0; } }
+    else { player.onGround = false; }
 
-    // move obstacles
+    // Move obstacles
     for(let i=obstacles.length-1;i>=0;i--){
       const o = obstacles[i]; o.x -= world.speed; if(o.x + o.base < -120) obstacles.splice(i,1);
     }
 
-    // distance-based spawning (more triangles, still fair)
+    // Distance-based spawning (more triangles, still fair)
     world.spawnDist -= world.speed;
     if(world.spawnDist <= 0){
       const startX = W + 40;
       spawnTriangleAt(startX);
-      // small chance to add a second one after a safe sub-gap
+      // Sometimes spawn a safe second triangle shortly after
       if(Math.random()<0.35){
         const subGap = Math.max(world.gapMinFloor*0.55, Math.min(200 + world.speed*10, world.gapMin*0.75));
         spawnTriangleAt(startX + subGap);
@@ -311,10 +347,10 @@ function update(){
       planNextSpawn();
     }
 
-    // scoring
+    // Score
     world.score += 0.24 + world.speed*0.013;
 
-    // collisions (AABB vs triangle’s bounding box — generous)
+    // Collisions (AABB vs triangle bbox)
     const pb = getPlayerBounds();
     for(const o of obstacles){
       const ob = { x:o.x, y:o.y - o.height, w:o.base, h:o.height };
@@ -361,6 +397,3 @@ update();
 </script>
 </body>
 </html>
-
-
-
